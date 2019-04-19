@@ -6,6 +6,9 @@ import lombok.Setter;
 public class UpdateModel implements Cloneable {
     @Getter
     @Setter
+    private String version;
+    @Getter
+    @Setter
     private String sheet;
     @Getter
     @Setter

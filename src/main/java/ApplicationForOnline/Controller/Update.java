@@ -4,24 +4,26 @@ import ApplicationForOnline.Model.ProgramModel;
 import ApplicationForOnline.Model.ReasonForChangeModel;
 import ApplicationForOnline.Model.UpdateModel;
 import Model.FileVo;
-import Utility.NumberUtility;
 import Utility.CommonUtility;
-import Utility.FileUtility;
+import Utility.NumberUtility;
+import org.apache.commons.io.FileUtils;
+import org.apache.commons.io.filefilter.AbstractFileFilter;
+import org.apache.commons.io.filefilter.TrueFileFilter;
 import org.apache.commons.lang3.StringUtils;
+import org.apache.commons.lang3.math.NumberUtils;
 import org.apache.poi.hssf.usermodel.HSSFWorkbook;
 import org.apache.poi.ss.usermodel.*;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 
 import java.io.*;
 import java.math.BigDecimal;
-import java.nio.file.StandardCopyOption;
+import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.stream.Collectors;
 
 public class Update {
     private final String ERROR = "ERROR";
-    private FileUtility _FileUtility;
     private String _PropertiesPath;
 
     public static void main(String[] args) throws Exception {
@@ -125,11 +127,7 @@ public class Update {
      * @return
      */
     private UpdateModel init(UpdateModel data) {
-        _FileUtility = new FileUtility();
-        _FileUtility.setReadLanguage(FileUtility.UTF_8);
-        _FileUtility.setWriteLanguage(FileUtility.UTF_8);
-
-        data.setToPath(addVersion(addDirEnd(data.getToPath())));
+        data.setToPath(addVersion(data));
         data.setFromPath(addDirEnd(data.getFromPath()));
         data.setPublishPath(addDirEnd(data.getPublishPath()));
 
@@ -152,18 +150,22 @@ public class Update {
     /**
      * 產生版號
      *
-     * @param path
+     * @param data
      * @return
      */
-    private String addVersion(String path) {
+    private String addVersion(UpdateModel data) {
         // 版次
-        _FileUtility.setWriteLanguage(FileUtility.UTF_8);
         SimpleDateFormat sdf = new SimpleDateFormat("yyyyMMdd");
+        String path = addDirEnd(data.getToPath());
         path = String.format("%s%s_v", path, sdf.format(Calendar.getInstance(TimeZone.getTimeZone("GMT+8")).getTime()));
-        int version = 1;
-        while (_FileUtility.isLivebyDir(path + version))
-            version++;
-        path = path + version + "\\";
+
+        int version = NumberUtils.toInt(data.getVersion(), 1);
+        path += version + "\\";
+        try {
+            FileUtils.deleteDirectory(new File(path));
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
 
         return path;
     }
@@ -221,14 +223,55 @@ public class Update {
      */
     private Map<String, FileVo> getProgramModel(String path) {
         Map<String, FileVo> fileMap = new TreeMap<>();
-        List<FileVo> list = _FileUtility.getFileList(path, true, null, getBlacklist());
-        list.forEach(vo -> {
-            vo.setPath(vo.getPath().replace(path, "\\"));
+
+        Collection<File> list = FileUtils.listFiles(new File(path),
+                new AbstractFileFilter() {
+                    @Override
+                    public boolean accept(File file) {
+                        boolean result = true;
+                        List<String> array = Arrays.asList("Debug\\", ".vs\\", "bin\\", "Release\\",
+                                ".vspscc", ".user", "Thumbs.db",
+                                "LoginEAI\\", "Web.Debug.config", "Web.Release.config",
+                                "\\Models\\Pershing.EBot.Models.Communication\\說明.txt",
+                                "\\Models\\Pershing.EBot.Models.Global\\ClassDiagram1.cd");
+                        for (String str : array) {
+                            if ((file.getPath() + file.getName()).contains(str)) {
+                                result = false;
+                                break;
+                            }
+                        }
+                        return result;
+                    }
+                }, TrueFileFilter.INSTANCE);
+
+        list.forEach(file -> {
+            FileVo vo = new FileVo();
+            vo.setPath((file.getParent() + "\\").replace(path, "\\"));
+            vo.setName(file.getName());
             fileMap.put(vo.getPath() + vo.getName(), vo);
         });
 
         return fileMap;
     }
+
+//    IOFileFilter fileFilter = new AbstractFileFilter() {
+//        @Override
+//        public boolean accept(File file) {
+//            boolean result = true;
+//            List<String> array = Arrays.asList("Debug\\", ".vs\\", "bin\\", "Release\\",
+//                    ".vspscc", ".user", "Thumbs.db",
+//                    "LoginEAI\\", "Web.Debug.config", "Web.Release.config",
+//                    "\\Models\\Pershing.EBot.Models.Communication\\說明.txt",
+//                    "\\Models\\Pershing.EBot.Models.Global\\ClassDiagram1.cd");
+//            for (String str : array) {
+//                if ((file.getPath() + file.getName()).contains(str)) {
+//                    result = false;
+//                    break;
+//                }
+//            }
+//            return result;
+//        }
+//    };
 
     /**
      * 取得過版清單 Execl 各項目
@@ -257,7 +300,8 @@ public class Update {
         for (int i = 1; i <= sheet.getLastRowNum(); i++) {
             row = sheet.getRow(i);
 
-            if (!checkCellValue(row, cells, "序號", "通報單", "項目", "程式清單")) {
+            if (!checkCellValue(row, cells, "序號", "通報單", "項目", "程式清單") ||
+                    "X".equalsIgnoreCase(getCell(row, cells, "UAT待換版"))) {
                 continue;
             }
 
@@ -288,13 +332,21 @@ public class Update {
 
                 ProgramModel programModel = new ProgramModel();
                 programModel.setExeclNo(model.getId());
-                if (temp.length == 2) {
-                    int beginIndex = temp[0].indexOf("\\", 1);
+                if (temp.length != 2) {
+                    programModel.setName(str);
+                    programModel.setStatus(ERROR);
+                    programModel.setErrorMessage("getReasonForChange error: 無法解析的交易路徑！");
+                } else {
+                    int beginIndex = temp[0].indexOf("\\", 2);
                     while (fileMap.get(temp[0]) == null && beginIndex > 0) {
                         temp[0] = temp[0].substring(beginIndex);
                         beginIndex = temp[0].indexOf("\\", 1);
                     }
-                    if (fileMap.get(temp[0]) != null) {
+                    if (fileMap.get(temp[0]) == null) {
+                        programModel.setName(str);
+                        programModel.setStatus(ERROR);
+                        programModel.setErrorMessage("getReasonForChange error: 無法找到對應的程式, 請確認交易路徑或名稱是否正確 or 更新專案至最新版!");
+                    } else {
                         FileVo vo = fileMap.get(temp[0]);
                         programModel.setPath(vo.getPath());
                         programModel.setName(vo.getName());
@@ -320,15 +372,7 @@ public class Update {
                                 programModel.setName("Pershing.EBot.Project.csproj");
                             }
                         }
-                    } else {
-                        programModel.setName(str);
-                        programModel.setStatus(ERROR);
-                        programModel.setErrorMessage("getReasonForChange error: 無法找到對應的程式, 請確認交易路徑或名稱是否正確 or 更新專案至最新版!");
                     }
-                } else {
-                    programModel.setName(str);
-                    programModel.setStatus(ERROR);
-                    programModel.setErrorMessage("getReasonForChange error: 無法解析的交易路徑！");
                 }
                 programs.add(programModel);
             }
@@ -368,7 +412,7 @@ public class Update {
         }
 
         String toName = data.getToPath() + execl.substring(execl.lastIndexOf("\\") + 1);
-        _FileUtility.copy(execl, toName);
+        FileUtils.copyFile(new File(execl), new File(toName));
         System.out.println("execl 已複制: " + toName);
 
         return workbook;
@@ -385,7 +429,7 @@ public class Update {
         String toPath = data.getToPath();
         toPath = toPath + toPath.substring(toPath.lastIndexOf('\\', toPath.length() - 2) + 1) + "\\SoruceCode\\";
         try {
-            _FileUtility.CreateDir(toPath.replace("\\SoruceCode\\", "\\上線申請書&測試報告\\"));
+            FileUtils.forceMkdir(new File(toPath.replace("\\SoruceCode\\", "\\上線申請書&測試報告\\")));
         } catch (IOException e) {
             e.printStackTrace();
         }
@@ -400,13 +444,12 @@ public class Update {
                 String path = programModel.getPath() + name;
                 path = (data.getFromPath() + path).replace("\\\\", "\\");
                 try {
-                    _FileUtility.copy(path, path.replace(data.getFromPath(), toPath), StandardCopyOption.REPLACE_EXISTING);
+                    FileUtils.copyFile(new File(path), new File(path.replace(data.getFromPath(), toPath)));
                 } catch (IOException e) {
                     e.printStackTrace();
                     programModel.setStatus(ERROR);
                     programModel.setErrorMessage("copyFile error: " + e.getMessage());
                 }
-
             }
         }
         return fileList;
@@ -531,7 +574,7 @@ public class Update {
         }
 
         String toFileName = toPath + "上線申請書.xlsx";
-        _FileUtility.CreateDir(toFileName);
+        FileUtils.touch(new File(toFileName));
         FileOutputStream fileOut = new FileOutputStream(toFileName);
         workbook.write(fileOut);
         fileOut.close();
@@ -623,7 +666,7 @@ public class Update {
                 ProgramModel newModel = (ProgramModel) model.clone();
                 newModel.setPath("\\bin\\");
                 newModel.setName(model.getName().substring(0, 6) + ".dll");
-                if (_FileUtility.isLivebyFile(publishPath + "bin\\" + newModel.getName())) {
+                if (new File(publishPath + "bin\\" + newModel.getName()).isFile()) {
                     list.add(newModel);
                 }
             }
@@ -633,23 +676,29 @@ public class Update {
                 ProgramModel newModel = (ProgramModel) model.clone();
                 newModel.setPath("\\bin\\");
                 newModel.setName(model.getName().substring(0, 6) + ".dll");
-                if (_FileUtility.isLivebyFile(publishPath + "bin\\" + newModel.getName())) {
+                if (new File(publishPath + "bin\\" + newModel.getName()).isFile()) {
                     list.add(newModel);
                 }
             }
 
             // Txn View
             if (model.getPath().contains("Views\\")) {
-                List<FileVo> voList = _FileUtility.getFileList(publishPath + "bin\\", false, Collections.singletonList(model.getName().toLowerCase()), Collections.singletonList(".dll"));
+                Collection<File> voList = FileUtils.listFiles(new File(publishPath + "bin\\"), new AbstractFileFilter() {
+                    @Override
+                    public boolean accept(File dir, String name) {
+                        return name.contains(model.getName().toLowerCase());
+                    }
+                }, TrueFileFilter.INSTANCE);
+
                 ProgramModel newModel = (ProgramModel) model.clone();
                 newModel.setPath("\\bin\\");
                 newModel.setName("EBOT.dll");
                 list.add(newModel);
-                for (FileVo vo : voList) {
+                for (File file : voList) {
                     try {
                         ProgramModel newModel2 = (ProgramModel) model.clone();
                         newModel2.setPath("\\bin\\");
-                        newModel2.setName(vo.getName());
+                        newModel2.setName(file.getName());
                         list.add(newModel2);
                     } catch (CloneNotSupportedException e) {
                         e.printStackTrace();
@@ -724,21 +773,7 @@ public class Update {
             Arrays.stream(numbers).forEach(number -> sb.append("* ").append(number).append("\r\n"));
         });
 
-        _FileUtility.write(logFile, sb.toString(), false);
+        FileUtils.write(new File(logFile), sb.toString(), StandardCharsets.UTF_8);
         return String.format("log 已產生: %s", logFile);
-    }
-
-    /**
-     * 例外清單
-     *
-     * @return
-     */
-    private static List<String> getBlacklist() {
-        return Arrays.asList("Debug\\", ".vs\\", "bin\\", "Release\\",
-                ".vspscc", ".user", "Thumbs.db",
-                "LoginEAI\\", "Web.Debug.config", "Web.Release.config",
-                "\\Models\\Pershing.EBot.Models.Communication\\說明.txt",
-                "\\Models\\Pershing.EBot.Models.Global\\ClassDiagram1.cd"
-        );
     }
 }

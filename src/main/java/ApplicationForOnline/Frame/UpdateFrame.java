@@ -61,6 +61,17 @@ public class UpdateFrame {
         n12.setBounds(nextX(), Y, setWIDTH(400), HEIGHT);
         cp.add(n12);
 
+        // 版號
+        JLabel n13 = new JLabel("版號", JLabel.RIGHT);
+        n13.setBounds(nextX(), Y, setWIDTH(50), HEIGHT);
+        cp.add(n13);
+
+        JTextField n14 = new JTextField("1");
+        n14.setBounds(nextX(), Y, setWIDTH(40), HEIGHT);
+        n14.setHorizontalAlignment(SwingConstants.RIGHT);
+        n14.setColumns(10);
+        cp.add(n14);
+
         // 換版清單 execl
         nextRow();
         JLabel n21 = new JLabel("換版清單(execl)", JLabel.RIGHT);
@@ -201,6 +212,7 @@ public class UpdateFrame {
         f01.addActionListener(ae -> {
             try {
                 data.setSheet(n12.getText());
+                data.setVersion(n14.getText());
                 data.setCopy(n62.isSelected());
                 data.setFromExecl(n22.getText());
                 data.setFromPath(n32.getText());
@@ -220,6 +232,7 @@ public class UpdateFrame {
 
         f02.addActionListener(ae -> {
             data.setSheet(n12.getText());
+            data.setVersion(n14.getText());
             data.setCopy(n62.isSelected());
             data.setFromExecl(n22.getText());
             data.setFromPath(n32.getText());
